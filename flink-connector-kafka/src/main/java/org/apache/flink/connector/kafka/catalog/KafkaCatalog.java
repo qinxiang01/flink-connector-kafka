@@ -293,8 +293,8 @@ public class KafkaCatalog extends AbstractCatalog {
     }
 
     @Override
-    public CatalogFunction getFunction(ObjectPath objectPath) throws FunctionNotExistException, CatalogException {
-        return null;
+    public CatalogFunction getFunction(ObjectPath functionPath) throws FunctionNotExistException, CatalogException {
+        throw new FunctionNotExistException(getName(), functionPath);
     }
 
     @Override
