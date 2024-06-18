@@ -19,9 +19,6 @@ public class KafkaCatalogFactory implements CatalogFactory {
     public Catalog createCatalog(Context context) {
         FactoryUtil.CatalogFactoryHelper helper = FactoryUtil.createCatalogFactoryHelper(this, context);
         helper.validate();
-
-
-        Properties baseProperties = new Properties();
         ReadableConfig options = helper.getOptions();
         return new KafkaCatalog(
                 context.getClassLoader()

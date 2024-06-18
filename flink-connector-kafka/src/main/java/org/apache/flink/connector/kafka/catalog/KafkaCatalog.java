@@ -1,21 +1,13 @@
 package org.apache.flink.connector.kafka.catalog;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.compress.utils.Lists;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.ReadableConfig;
-import org.apache.flink.connector.kafka.catalog.factory.KafkaCatalogFactoryOptions;
-import org.apache.flink.connector.kafka.dynamic.metadata.KafkaMetadataService;
 import org.apache.flink.connector.kafka.source.KafkaPropertiesUtil;
 import org.apache.flink.connector.kafka.source.KafkaSourceOptions;
-import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
-import org.apache.flink.streaming.connectors.kafka.internals.KafkaTopicPartition;
 import org.apache.flink.streaming.connectors.kafka.table.KafkaConnectorOptions;
-import org.apache.flink.streaming.connectors.kafka.table.UpsertKafkaDynamicTableFactory;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.*;
@@ -25,25 +17,23 @@ import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.utils.GlobalCache;
-import org.apache.flink.table.utils.ThreadLocalCache;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
-
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.ListTopicsResult;
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.sql.ResultSetMetaData;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
 
-import static org.apache.flink.connector.kafka.catalog.factory.KafkaCatalogFactoryOptions.*;
+import static org.apache.flink.connector.kafka.catalog.factory.KafkaCatalogFactoryOptions.IDENTIFIER;
+import static org.apache.flink.connector.kafka.catalog.factory.KafkaCatalogFactoryOptions.KEY_FIELDS_PREFIX;
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
