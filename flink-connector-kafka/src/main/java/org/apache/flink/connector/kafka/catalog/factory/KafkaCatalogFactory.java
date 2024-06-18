@@ -49,10 +49,6 @@ public class KafkaCatalogFactory implements CatalogFactory {
         options.add(KafkaCatalogFactoryOptions.KEY_FIELDS_PREFIX);
         options.add(KafkaCatalogFactoryOptions.INFER_SCHEMA_PRIMITIVE_AS_STRING);
         options.add(KafkaCatalogFactoryOptions.MAX_FETCH_RECORDS);
-
-        options.add(KafkaCatalogFactoryOptions.MAX_FETCH_RECORDS);
-        options.add(KafkaCatalogFactoryOptions.MAX_FETCH_RECORDS);
-        options.add(KafkaCatalogFactoryOptions.MAX_FETCH_RECORDS);
         return options;
     }
 

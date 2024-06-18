@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.compress.utils.Lists;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.connector.kafka.catalog.factory.KafkaCatalogFactoryOptions;
 import org.apache.flink.connector.kafka.dynamic.metadata.KafkaMetadataService;
@@ -23,6 +24,8 @@ import org.apache.flink.table.catalog.stats.CatalogColumnStatistics;
 import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.utils.GlobalCache;
+import org.apache.flink.table.utils.ThreadLocalCache;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
 
@@ -48,7 +51,6 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 public class KafkaCatalog extends AbstractCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaCatalog.class);
-    private final KafkaMetadataService kafkaMetadataService;
     private final String KAFKA_GROUP_ID = "flink-catalog-%s-%s";
 
 
@@ -57,7 +59,6 @@ public class KafkaCatalog extends AbstractCatalog {
 
     private final String bootstrapServers;
     private final String valueFormat;
-    private final ReadableConfig options;
     private final String keyFieldsPrefix;
 
 
@@ -73,10 +74,8 @@ public class KafkaCatalog extends AbstractCatalog {
         checkNotNull(userClassLoader);
         checkArgument(!StringUtils.isNullOrWhitespaceOnly(bootstrapServers));
         checkArgument(KafkaValuesFormat.checkFormat(valueFormat), "Unsupported value format:" + valueFormat);
-        this.kafkaMetadataService = null;
         this.bootstrapServers = bootstrapServers;
         this.valueFormat = valueFormat;
-        this.options = options;
         this.keyFieldsPrefix = options.get(KEY_FIELDS_PREFIX) == null ? KEY_FIELDS_PREFIX.defaultValue() : options.get(KEY_FIELDS_PREFIX);
         baseProperties = new Properties();
         baseProperties.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
@@ -141,6 +140,7 @@ public class KafkaCatalog extends AbstractCatalog {
 
     @Override
     public CatalogBaseTable getTable(ObjectPath topicPath) throws TableNotExistException, CatalogException {
+        LOG.info(" create kafka catalog table :{}", topicPath.getFullName());
         // 获取主键 ，使用partition和offset作为key
         if (!tableExists(topicPath)) {
             throw new TableNotExistException(getName(), topicPath);
@@ -149,50 +149,57 @@ public class KafkaCatalog extends AbstractCatalog {
         String topicName = topicPath.getObjectName();
 
         List<ConsumerRecord<String, String>> records = consumerMessage(topicName);
+        String[] columnNames = null;
+        DataType[] types = null;
         if (records == null || records.isEmpty() || records.get(0) == null || records.get(0).value() == null) {
-            throw new RuntimeException("topic exists but records is empty");
+            // 从Kafka没有获取到数据，就从前置缓存的SQL语句中的字段获取数据,内置逻辑：详见：SqlNodeToOperationConversion.convert
+            Object object = GlobalCache.get();
+            if (object instanceof Map) {
+                Map tableMap = (Map) object;
+                List colList = (List) tableMap.get(getName() + "=" + topicPath.getDatabaseName() + "=" + topicPath.getObjectName());
+                if (null == colList) {
+                    throw new RuntimeException("Failed to find record in table " + topicPath.getDatabaseName() + "." + topicPath.getObjectName());
+                }
+                columnNames = new String[colList.size()];
+                types = new DataType[colList.size()];
+                for (int i = 0; i < colList.size(); i++) {
+                    String col = (String) colList.get(i);
+                    columnNames[i] = col;
+                    // 默认全部是字符串
+                    types[i] = DataTypes.STRING();
+                }
+            } else {
+                throw new RuntimeException("Failed to find record in table " + topicPath.getDatabaseName() + "." + topicPath.getObjectName());
+            }
+        } else {
+            // 从Kafka获取到的数据来解析字段和类型
+            ConsumerRecord<String, String> record = records.get(0);
+            String value = record.value();
+            ObjectMapper objectMapper = new ObjectMapper();
+            Map recoderMap = null;
+            try {
+                recoderMap = objectMapper.readValue(value, Map.class);
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException(e);
+            }
+            columnNames = new String[recoderMap.size()];
+            types = new DataType[recoderMap.size()];
+            int i = 0;
+            for (Object key : recoderMap.keySet()) {
+                Object object = recoderMap.get(key);
+                columnNames[i] = key.toString();
+                types[i] = KafkaTypeMapper.mapping(object);
+                i++;
+            }
         }
-        ConsumerRecord<String, String> record = records.get(0);
-        String value = record.value();
-        ObjectMapper objectMapper = new ObjectMapper();
-        Map recoderMap = null;
-        try {
-            recoderMap = objectMapper.readValue(value, Map.class);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
-
-        String[] columnNames = new String[recoderMap.size()];
-        DataType[] types = new DataType[recoderMap.size()];
-//        columnNames[0] = "partition";
-//        columnNames[1] = "offset";
-//        columnNames[2] = "timestamp";
-//        types[0] = DataTypes.INT().notNull();
-//        types[1] = DataTypes.BIGINT().notNull();
-//        types[2] = DataTypes.BIGINT().notNull();
-
-        int i = 0;
-        for (Object key : recoderMap.keySet()) {
-            Object object = recoderMap.get(key);
-            columnNames[i] = key.toString();
-            types[i] = KafkaTypeMapper.mapping(object);
-            i++;
-        }
-
-//        List<String> pkFields = new ArrayList<>();
-//        Optional<UniqueConstraint> primaryKey = Optional.of(UniqueConstraint.primaryKey("pk_partition_offset", pkFields));
-
         Schema.Builder schemaBuilder = Schema.newBuilder().fromFields(columnNames, types);
-//        primaryKey.ifPresent(
-//                pk -> schemaBuilder.primaryKeyNamed(pk.getName(), pk.getColumns()));
+
         Schema tableSchema = schemaBuilder.build();
 
         // kafka连接器的参数
         Map<String, String> props = new HashMap<>();
         props.put(CONNECTOR.key(), IDENTIFIER);
         props.put(KafkaConnectorOptions.PROPS_BOOTSTRAP_SERVERS.key(), bootstrapServers);
-//        props.put(KafkaConnectorOptions.KEY_FORMAT.key(), valueFormat.toLowerCase());
-//        props.put(KafkaConnectorOptions.KEY_FIELDS.key(), valueFormat.toLowerCase());
         props.put(KafkaConnectorOptions.VALUE_FORMAT.key(), valueFormat.toLowerCase());
         props.put(KafkaConnectorOptions.TOPIC.key(), topicName);
         props.put(KafkaConnectorOptions.PROPS_GROUP_ID.key(), String.format(KAFKA_GROUP_ID, getName(), "connector"));
